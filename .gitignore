@@ -1,0 +1,48 @@
+node_modules/
+dist/
+
+# Local runtime configuration and credentials
+.env
+.env.*
+!.env.example
+.codex/
+.claude/
+.commandcode/
+.config/opencode/
+**/auth.json
+**/credentials.json
+**/*token*.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Persistent runtime data and databases
+data/
+worktrees/
+*.db
+*.db-shm
+*.db-wal
+
+# Logs, process state, temporary files, and generated evidence
+logs/
+*.log
+*.pid
+*.lock
+.runtime/
+runtime-state/
+tmp/
+temp/
+.tmp/
+*.tmp
+*.temp
+*.bak
+*.swp
+coverage/
+evidence/*.json
+
+# Local editor and OS artifacts
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

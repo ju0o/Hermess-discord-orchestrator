@@ -1,0 +1,9 @@
+{
+  "version": "1.0.0",
+  "projects": {
+    "EXAMPLE_PROJECT": {
+      "workspace": "C:\\path\\to\\your\\project",
+      "status": "ACTIVE"
+    }
+  }
+}

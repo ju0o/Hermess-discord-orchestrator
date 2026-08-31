@@ -1,0 +1,106 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { createServer } from "node:http";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { Store } from "../src/storage/database.js";
+import { TaskRepository } from "../src/tasks/repository.js";
+import { TaskAdmission } from "../src/tasks/taskAdmission.js";
+import { LocalTaskControl } from "../src/control/localTaskControl.js";
+import { getTaskStatus, submitTask } from "../src/control/certClient.js";
+
+const roots: string[] = []; const controls: LocalTaskControl[] = []; const stores: Store[] = [];
+afterEach(async () => { await Promise.all(controls.splice(0).map((item) => item.close())); stores.splice(0).forEach((item) => item.close()); roots.splice(0).forEach((item) => rmSync(item, { recursive: true, force: true })); });
+function fixture() { const root = mkdtempSync(path.join(tmpdir(), "hermess-control-")); roots.push(root); const store = new Store(path.join(root, "fixture.db")); stores.push(store);
+  const tasks = new TaskRepository(store); const admission = new TaskAdmission(tasks); const control = new LocalTaskControl(admission, { host: "127.0.0.1", port: 0, token: "test-token-with-enough-entropy" }); controls.push(control); return { root, store, tasks, admission, control }; }
+async function endpoint(control: LocalTaskControl): Promise<string> { await control.start(); return `http://127.0.0.1:${control.address()!.port}`; }
+async function raw(url: string, token: string | undefined, body: string, pathName = "/control") { return fetch(`${url}${pathName}`, { method: "POST", headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), "content-type": "application/json" }, body }); }
+
+describe("minimal local Task control", () => {
+  it("A CONTROL_SURFACE_STARTS_INSIDE_RUNTIME and B CONTROL_SURFACE_BINDS_LOCAL_ONLY", async () => { const x = fixture(); const url = await endpoint(x.control); expect(x.control.address()?.host).toBe("127.0.0.1"); expect(url).toMatch(/^http:\/\/127\.0\.0\.1:/); expect(() => new LocalTaskControl(x.admission, { host: "0.0.0.0", port: 0, token: "x" })).toThrow("CONTROL_HOST_MUST_BE_LOOPBACK");
+    const runtime = readFileSync(path.resolve(import.meta.dirname, "../src/runtime/runtime.ts"), "utf8"); expect(runtime).toContain("await this.localTaskControl?.start()"); });
+  it("C UNAUTHENTICATED_REQUEST_REJECTED and D INVALID_TOKEN_REJECTED", async () => { const x = fixture(); const url = await endpoint(x.control);
+    expect((await raw(url, undefined, "{}")).status).toBe(401); expect((await raw(url, "wrong", "{}")).status).toBe(401); });
+  it("E MALFORMED_REQUEST_REJECTED and F UNKNOWN_COMMAND_REJECTED", async () => { const x = fixture(); const url = await endpoint(x.control);
+    expect(await (await raw(url, "test-token-with-enough-entropy", "{" )).json()).toMatchObject({ accepted: false, error: "MALFORMED_REQUEST" });
+    expect(await (await raw(url, "test-token-with-enough-entropy", JSON.stringify({ command: "DELETE" }))).json()).toMatchObject({ accepted: false, error: "UNKNOWN_COMMAND" }); });
+  it("G VALID_SUBMIT_TASK_REACHES_CANONICAL_ADMISSION, M ONE_RUNTIME_ONLY, N TASK_ID_RETURNED_FROM_RUNTIME_AUTHORITY", async () => { const x = fixture(); const url = await endpoint(x.control);
+    const result = await submitTask({ endpoint: url, token: "test-token-with-enough-entropy", requestId: "req-1", task: { taskId: "CONTROL-1", projectId: "p", workspace: x.root, title: "fixture" } });
+    expect(result).toEqual({ accepted: true, task_id: "CONTROL-1", request_id: "req-1" }); expect(await getTaskStatus({ endpoint: url, token: "test-token-with-enough-entropy", taskId: "CONTROL-1" })).toMatchObject({ accepted: true, task_id: "CONTROL-1", status: "QUEUED" }); expect(x.tasks.get("CONTROL-1")?.status).toBe("QUEUED"); });
+  it("H DISCORD_AND_MACHINE_SUBMISSION_SHARE_CANONICAL_ADMISSION and Q Discord semantics unchanged", async () => { const x = fixture();
+    const discord = await x.admission.submit({ taskId: "D", project: "p", workspace: x.root, title: "Discord" }, { owner: "discord-owner", defaultGoal: "wire" });
+    const machine = await x.admission.submit({ taskId: "M", project: "p", workspace: x.root, title: "Machine" }, { owner: "CERTIFICATION:client", defaultGoal: "wire" });
+    expect({ ...discord, taskId: "x", title: "x", goal: "x", owner: "x", createdAt: "x" }).toMatchObject({ ...machine, taskId: "x", title: "x", goal: "x", owner: "x", createdAt: "x" }); });
+  it("I CONTROL_SURFACE_DOES_NOT_WRITE_STORE_DIRECTLY and J-K-L cert client has structural dependency boundary", () => { const root = path.resolve(import.meta.dirname, "..");
+    const server = readFileSync(path.join(root, "src/control/localTaskControl.ts"), "utf8"); const client = readFileSync(path.join(root, "src/control/certClient.ts"), "utf8");
+    expect(server).not.toMatch(/\bStore\b|\.db\b|orchestrator\.db/); expect(client).not.toMatch(/OrchestratorRuntime|\bStore\b|orchestrator\.db|node:sqlite|storage\/database/); });
+  it("O FAILED_ADMISSION_RETURNS_REJECTED", async () => { const x = fixture(); const result = await submitTask({ endpoint: await endpoint(x.control), token: "test-token-with-enough-entropy", task: { title: "missing workspace" } });
+    expect(result).toMatchObject({ accepted: false, error: "INVALID_TASK_REQUEST" }); expect(x.store.db.prepare("SELECT count(*) AS n FROM tasks").get()).toEqual({ n: 0 }); });
+  it("P RUNTIME_SHUTDOWN_CLOSES_CONTROL_SURFACE", async () => { const x = fixture(); const url = await endpoint(x.control); await x.control.close(); await expect(submitTask({ endpoint: url, token: "test-token-with-enough-entropy", task: {} })).rejects.toThrow("CONTROL_RUNTIME_UNAVAILABLE");
+    const runtime = readFileSync(path.resolve(import.meta.dirname, "../src/runtime/runtime.ts"), "utf8"); expect(runtime).toContain("await this.localTaskControl?.close(); await this.gateway.stop()"); });
+  it("U CONTINUE_TASK requeues only the proven watchdog WAITING_MAIN state and is idempotent", async () => { const x = fixture();
+    x.tasks.upsertProject({ projectId: "p", name: "p", workspace: x.root, ssotPaths: [], status: "ACTIVE" });
+    x.tasks.create({ taskId: "CONTINUE-1", projectId: "p", title: "continue", goal: "observe", role: "DEVELOPER", requiredCapabilities: ["coding"], status: "WAITING_MAIN", workspace: x.root,
+      readContext: {}, fileScope: [], doNot: [], validation: [], owner: "owner", result: "Watchdog detected no worker heartbeat for 1800000ms." });
+    const url = await endpoint(x.control); const first = await raw(url, "test-token-with-enough-entropy", JSON.stringify({ command: "CONTINUE_TASK", task_id: "CONTINUE-1", request_id: "u1" }));
+    expect(await first.json()).toMatchObject({ accepted: true, task_id: "CONTINUE-1", status: "QUEUED", continued: true });
+    const second = await raw(url, "test-token-with-enough-entropy", JSON.stringify({ command: "CONTINUE_TASK", task_id: "CONTINUE-1", request_id: "u2" }));
+    expect(await second.json()).toMatchObject({ accepted: true, task_id: "CONTINUE-1", status: "QUEUED", continued: false });
+  });
+  it("V CONTINUE_TASK preserves genuine Main-required WAITING_MAIN and rejects unknown or malformed requests", async () => { const x = fixture();
+    x.tasks.upsertProject({ projectId: "p", name: "p", workspace: x.root, ssotPaths: [], status: "ACTIVE" });
+    x.tasks.create({ taskId: "MAIN-1", projectId: "p", title: "approval", goal: "approval", role: "DEVELOPER", requiredCapabilities: ["coding"], status: "WAITING_MAIN", workspace: x.root,
+      readContext: {}, fileScope: [], doNot: [], validation: [], owner: "owner", result: "MODEL_ROUTING_BLOCKED" }); const url = await endpoint(x.control);
+    expect(await (await raw(url, "test-token-with-enough-entropy", JSON.stringify({ command: "CONTINUE_TASK", task_id: "MAIN-1" }))).json()).toMatchObject({ accepted: false, error: "ADMISSION_REJECTED" });
+    expect(x.tasks.get("MAIN-1")?.status).toBe("WAITING_MAIN");
+    expect(await (await raw(url, "test-token-with-enough-entropy", JSON.stringify({ command: "CONTINUE_TASK" }))).json()).toMatchObject({ accepted: false, error: "MALFORMED_REQUEST" });
+    expect(await (await raw(url, "test-token-with-enough-entropy", JSON.stringify({ command: "CONTINUE_TASK", task_id: "MISSING" }))).json()).toMatchObject({ accepted: false, error: "TASK_NOT_FOUND" });
+  });
+  it("W CONTINUE_TASK requires the existing bearer authorization", async () => { const x = fixture(); const url = await endpoint(x.control);
+    expect(await (await raw(url, "wrong", JSON.stringify({ command: "CONTINUE_TASK", task_id: "MISSING" }))).json()).toMatchObject({ accepted: false, error: "AUTHENTICATION_REJECTED" });
+  });
+  it("X MAINTENANCE_SHUTDOWN acknowledges before invoking the Runtime callback and is idempotent", async () => { let calls = 0; const x = fixture(); const control = new LocalTaskControl(x.admission, { host: "127.0.0.1", port: 0, token: "test-token-with-enough-entropy", maintenanceShutdown: () => ({ accepted: true, onAccepted: () => { calls += 1; } }) }); controls.push(control); const url = await endpoint(control);
+    expect(await (await raw(url, "test-token-with-enough-entropy", JSON.stringify({ command: "MAINTENANCE_SHUTDOWN", request_id: "s1" }))).json()).toMatchObject({ accepted: true, already_requested: false, request_id: "s1" }); await new Promise((resolve) => setImmediate(resolve)); expect(calls).toBe(1);
+  });
+  it("Y MAINTENANCE_SHUTDOWN rejects unauthorized and malformed requests", async () => { const x = fixture(); const url = await endpoint(x.control);
+    expect(await (await raw(url, "wrong", JSON.stringify({ command: "MAINTENANCE_SHUTDOWN" }))).json()).toMatchObject({ accepted: false, error: "AUTHENTICATION_REJECTED" });
+    const guarded = new LocalTaskControl(x.admission, { host: "127.0.0.1", port: 0, token: "test-token-with-enough-entropy", maintenanceShutdown: () => ({ accepted: true, onAccepted: () => undefined }) }); controls.push(guarded); const guardedUrl = await endpoint(guarded);
+    expect(await (await raw(guardedUrl, "test-token-with-enough-entropy", JSON.stringify({ command: "MAINTENANCE_SHUTDOWN", task_id: "not-allowed" }))).json()).toMatchObject({ accepted: false, error: "MALFORMED_REQUEST" });
+  });
+  it("ASUS proposal consumption stays inside the authenticated Runtime callback", async () => { const x = fixture(); const calls: Array<{ taskId: string; acceptanceId: string }> = [];
+    x.control.setAsusProposalConsumer(async (taskId, acceptanceId) => { calls.push({ taskId, acceptanceId }); return { observationId: "obs-1", taskId, status: "QUEUED", continued: true }; });
+    const url = await endpoint(x.control);
+    expect(await (await raw(url, "test-token-with-enough-entropy", JSON.stringify({ command: "CONSUME_ASUS_PROPOSAL", task_id: "T-1", acceptance_id: "A-1", request_id: "p1" }))).json()).toMatchObject({ accepted: true, observation_id: "obs-1", task_id: "T-1", status: "QUEUED", continued: true, request_id: "p1" });
+    expect(calls).toEqual([{ taskId: "T-1", acceptanceId: "A-1" }]);
+    expect(await (await raw(url, "wrong", JSON.stringify({ command: "CONSUME_ASUS_PROPOSAL", task_id: "T-1", acceptance_id: "A-1" }))).json()).toMatchObject({ accepted: false, error: "AUTHENTICATION_REJECTED" });
+    expect(await (await raw(url, "test-token-with-enough-entropy", JSON.stringify({ command: "CONSUME_ASUS_PROPOSAL", task_id: "T-1" }))).json()).toMatchObject({ accepted: false, error: "MALFORMED_REQUEST" });
+  });
+  it("bounded dispatch redrive is authenticated, validated, and carries no Worker selector", async () => { const x = fixture(); const calls: unknown[][] = [];
+    x.control.setDispatchRedrive(async (...args) => { calls.push(args); return { recoveryId: args[1], taskId: args[0], priorAssignment: "OPENCODE", status: "SUCCEEDED" }; }); const url = await endpoint(x.control);
+    const body = { command: "REDRIVE_RUNTIME_DISPATCH", task_id: "T-1", recovery_id: "R-1", reason: "LOOP_GUARD", request_id: "d1" };
+    expect(await (await raw(url, "wrong", JSON.stringify(body))).json()).toMatchObject({ accepted: false, error: "AUTHENTICATION_REJECTED" });
+    expect(await (await raw(url, "test-token-with-enough-entropy", JSON.stringify({ ...body, worker: "CODEX" }))).json()).toMatchObject({ accepted: false, error: "MALFORMED_REQUEST" });
+    expect(await (await raw(url, "test-token-with-enough-entropy", JSON.stringify(body))).json()).toMatchObject({ accepted: true, recovery_id: "R-1", prior_assignment: "OPENCODE" }); expect(calls).toEqual([["T-1", "R-1", "LOOP_GUARD"]]);
+  });
+  it("binding reconciliation is authenticated and rejects Worker/model selectors", async () => { const x=fixture(); const calls: unknown[][]=[];
+    x.control.setBindingReconcile((...args)=>{calls.push(args); return {reconciliationId:args[1],taskId:args[0],oldBaseSha:args[2],newBaseSha:args[3],status:"SUCCEEDED"};}); const url=await endpoint(x.control); const body={command:"RECONCILE_EXECUTION_BINDING",task_id:"T-1",reconciliation_id:"B-1",expected_old_base_sha:"a".repeat(40),approved_new_sha:"b".repeat(40),reason:"owner approved",request_id:"b1"};
+    expect(await (await raw(url,"wrong",JSON.stringify(body))).json()).toMatchObject({accepted:false,error:"AUTHENTICATION_REJECTED"}); expect(await (await raw(url,"test-token-with-enough-entropy",JSON.stringify({...body,worker:"CODEX"}))).json()).toMatchObject({accepted:false,error:"MALFORMED_REQUEST"}); expect(await (await raw(url,"test-token-with-enough-entropy",JSON.stringify(body))).json()).toMatchObject({accepted:true,reconciliation_id:"B-1"}); expect(calls).toEqual([["T-1","B-1","a".repeat(40),"b".repeat(40),"owner approved"]]);
+  });
+  it("Z control shutdown remains transport-only and cannot kill OS processes", () => { const source = readFileSync(path.resolve(import.meta.dirname, "../src/control/localTaskControl.ts"), "utf8"); expect(source).not.toMatch(/process\.kill|taskkill|Stop-Process/); });
+  it("R-S-T existing authority modules remain outside the control surface", () => { const source = readFileSync(path.resolve(import.meta.dirname, "../src/control/localTaskControl.ts"), "utf8");
+    expect(source).not.toMatch(/Dispatcher|Recovery|TaskCompletionProjection|transition\(|status:\s*["'](?:DISPATCHED|COMPLETED|PASS)/); });
+  it("U startup bind failure remains visible and does not become ERR_SERVER_NOT_RUNNING", async () => {
+    const blocker = createServer(); await new Promise<void>((resolve) => blocker.listen(0, "127.0.0.1", resolve));
+    const port = (blocker.address() as { port: number }).port;
+    const x = fixture(); const failed = new LocalTaskControl(x.admission, { host: "127.0.0.1", port, token: "test-token-with-enough-entropy" });
+    await expect(failed.start()).rejects.toMatchObject({ code: "EADDRINUSE" });
+    await expect(failed.close()).resolves.toBeUndefined();
+    await new Promise<void>((resolve, reject) => blocker.close((error) => error ? reject(error) : resolve()));
+  });
+  it("V unexpected server death remains visible during cleanup", async () => {
+    const x = fixture(); await x.control.start();
+    const server = (x.control as unknown as { server: ReturnType<typeof createServer> }).server;
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await expect(x.control.close()).rejects.toMatchObject({ code: "ERR_SERVER_NOT_RUNNING" });
+  });
+});
