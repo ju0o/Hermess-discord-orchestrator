@@ -1,6 +1,17 @@
-# HERMESS Discord Orchestrator — Public Preview
+# HERMESS Discord Orchestrator
 
-HERMESS Discord Orchestrator is a local Runtime that coordinates approved coding Tasks through Discord, SQLite state, and configurable CLI-based Workers. It is the Discord-facing Runtime component of the wider HERMESS Company OS; it is not the Company OS supervisor itself.
+Run a local AI engineering team through Discord using multiple coding agents, deterministic task state, independent Review, and QA.
+
+![HERMESS architecture](docs/assets/hermess-architecture.svg)
+
+HERMESS Discord Orchestrator is a local Runtime that coordinates approved coding Tasks through Discord, SQLite state, and configurable CLI-based Workers. It is an early Public Preview and does not claim autonomous production operation.
+
+## What it does
+
+- Receives approved work through Discord and persists Task state locally.
+- Dispatches configurable Worker CLIs while keeping role ownership explicit.
+- Separates implementation, independent Review, and rendered/user-facing QA gates.
+- Records bounded execution and recovery evidence for local inspection.
 
 ## Public Preview status
 
@@ -87,6 +98,6 @@ Never report tokens, cookies, session files, private webhook URLs, or raw privat
 
 Open an Issue with a minimal reproduction and redacted logs. For changes, use a fork or feature branch, keep the change scoped, add or update focused tests, run `npm run check`, and submit a PR for review. Do not include `.env`, runtime databases, local paths, Discord IDs, or private operational evidence.
 
-## Relationship to HERMESS Company OS
+## Runtime boundaries
 
-Company OS provides the broader governance and supervisory context. This repository provides the local Discord Orchestrator Runtime and its Worker/Task coordination surfaces. The two repositories may be deployed separately; this README documents only the executable path for this repository.
+HERMESS uses deterministic Task, Review, QA, and recovery contracts. This public repository stands on its own: internal governance material is not required to install or run this executable preview.
