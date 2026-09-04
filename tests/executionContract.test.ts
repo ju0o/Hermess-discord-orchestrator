@@ -27,6 +27,11 @@ describe("execution contract and review semantics", () => {
   it("keeps genuine discovery-only fallback", () => {
     expect(assertExecutionContract(undefined, { goal: "inspect and report only", validation: ["read-only discovery"] })).toEqual(READ_ONLY_DISCOVERY);
   });
+  it("keeps an explicit read-only contract despite directly negated mutation wording", () => {
+    const task = { goal: "Read package.json. Do not modify any file.", validation: ["package facts"], executionContract: READ_ONLY_DISCOVERY } as never;
+    expect(assertExecutionContract(READ_ONLY_DISCOVERY, task)).toEqual(READ_ONLY_DISCOVERY);
+    expect(effectiveExecutionContract(task)).toEqual(READ_ONLY_DISCOVERY);
+  });
   it("defaults a DEVELOPER-role task to IMPLEMENT_AND_VALIDATE even when the goal has no English mutation keyword", () => {
     // A prior bounded run: goal
     // text was entirely Korean ("src/app/community/[id]/page.tsx 신규 생성...") and

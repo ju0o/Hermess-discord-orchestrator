@@ -8,6 +8,7 @@ import { TaskRepository } from "../src/tasks/repository.js";
 import { TaskAdmission } from "../src/tasks/taskAdmission.js";
 import { LocalTaskControl } from "../src/control/localTaskControl.js";
 import { getTaskStatus, submitTask } from "../src/control/certClient.js";
+import { IMPLEMENT_AND_VALIDATE, READ_ONLY_DISCOVERY, effectiveExecutionContract } from "../src/contracts/executionContract.js";
 
 const roots: string[] = []; const controls: LocalTaskControl[] = []; const stores: Store[] = [];
 afterEach(async () => { await Promise.all(controls.splice(0).map((item) => item.close())); stores.splice(0).forEach((item) => item.close()); roots.splice(0).forEach((item) => rmSync(item, { recursive: true, force: true })); });
@@ -27,6 +28,17 @@ describe("minimal local Task control", () => {
   it("G VALID_SUBMIT_TASK_REACHES_CANONICAL_ADMISSION, M ONE_RUNTIME_ONLY, N TASK_ID_RETURNED_FROM_RUNTIME_AUTHORITY", async () => { const x = fixture(); const url = await endpoint(x.control);
     const result = await submitTask({ endpoint: url, token: "test-token-with-enough-entropy", requestId: "req-1", task: { taskId: "CONTROL-1", projectId: "p", workspace: x.root, title: "fixture" } });
     expect(result).toEqual({ accepted: true, task_id: "CONTROL-1", request_id: "req-1" }); expect(await getTaskStatus({ endpoint: url, token: "test-token-with-enough-entropy", taskId: "CONTROL-1" })).toMatchObject({ accepted: true, task_id: "CONTROL-1", status: "QUEUED" }); expect(x.tasks.get("CONTROL-1")?.status).toBe("QUEUED"); });
+  it("persists an explicit read-only contract through LocalTaskControl", async () => { const x = fixture(); const url = await endpoint(x.control);
+    const result = await submitTask({ endpoint: url, token: "test-token-with-enough-entropy", task: { taskId: "CONTROL-READ-ONLY", projectId: "p", workspace: x.root, title: "inspect", goal: "Read package.json. Do not modify any file.", role: "MCP_SPECIALIST", validation: "package facts", executionContract: READ_ONLY_DISCOVERY } });
+    expect(result).toMatchObject({ accepted: true, task_id: "CONTROL-READ-ONLY" }); const task = x.tasks.get("CONTROL-READ-ONLY")!;
+    expect(task.executionContract).toEqual(READ_ONLY_DISCOVERY); expect(effectiveExecutionContract(task)).toEqual(READ_ONLY_DISCOVERY);
+  });
+  it("preserves explicit implementation validation and rejects unsupported execution contracts", async () => { const x = fixture(); const url = await endpoint(x.control);
+    const implementation = await submitTask({ endpoint: url, token: "test-token-with-enough-entropy", task: { taskId: "CONTROL-IMPLEMENT", projectId: "p", workspace: x.root, title: "fix", goal: "Fix the build", validation: "npm test", executionContract: IMPLEMENT_AND_VALIDATE } });
+    expect(implementation).toMatchObject({ accepted: true, task_id: "CONTROL-IMPLEMENT" }); expect(effectiveExecutionContract(x.tasks.get("CONTROL-IMPLEMENT")!)).toEqual(IMPLEMENT_AND_VALIDATE);
+    const invalid = await submitTask({ endpoint: url, token: "test-token-with-enough-entropy", task: { taskId: "CONTROL-INVALID", projectId: "invalid-project", workspace: path.join(x.root, "invalid"), title: "invalid", executionContract: { ...READ_ONLY_DISCOVERY, mode: "UNSUPPORTED" } } });
+    expect(invalid).toMatchObject({ accepted: false, error: "INVALID_TASK_REQUEST" }); expect(x.tasks.get("CONTROL-INVALID")).toBeUndefined(); expect(x.tasks.getProject("invalid-project")).toBeUndefined();
+  });
   it("H DISCORD_AND_MACHINE_SUBMISSION_SHARE_CANONICAL_ADMISSION and Q Discord semantics unchanged", async () => { const x = fixture();
     const discord = await x.admission.submit({ taskId: "D", project: "p", workspace: x.root, title: "Discord" }, { owner: "discord-owner", defaultGoal: "wire" });
     const machine = await x.admission.submit({ taskId: "M", project: "p", workspace: x.root, title: "Machine" }, { owner: "CERTIFICATION:client", defaultGoal: "wire" });

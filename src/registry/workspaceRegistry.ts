@@ -11,7 +11,7 @@ export interface WorkspaceRegistryEntry {
 export class WorkspaceRegistry {
   private readonly configured: Map<string, WorkspaceRegistryEntry>;
 
-  constructor(private readonly store: Store, registryPath = path.resolve("config/project-workspaces.json")) {
+  constructor(private readonly store: Store, registryPath = defaultRegistryPath()) {
     this.configured = loadRegistry(registryPath);
   }
 
@@ -49,6 +49,13 @@ export class WorkspaceRegistry {
   snapshot(): WorkspaceRegistryEntry[] {
     return [...this.configured.values()].map((entry) => ({ ...entry }));
   }
+}
+
+/** A machine-local registry may override the tracked default without changing
+ * the Windows-compatible default when WORKSPACE_REGISTRY_PATH is unset. */
+function defaultRegistryPath(): string {
+  const override = (process.env.WORKSPACE_REGISTRY_PATH || "").trim();
+  return override || path.resolve("config/project-workspaces.json");
 }
 
 function loadRegistry(filePath: string): Map<string, WorkspaceRegistryEntry> {

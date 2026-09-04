@@ -15,11 +15,11 @@ HERMESS Discord Orchestrator is a local Runtime that coordinates approved coding
 
 ## Public Preview status
 
-This release is an early Public Preview. Interfaces, Worker compatibility, recovery behavior, and operational guidance may change. Run it only on a machine and Discord server where you accept local automation risk. Do not use production credentials or production repositories for first setup.
+This release is an early Public Preview, validated on Windows 10/11 and Ubuntu Native for the normal Node/npm Runtime path. Other Linux distributions are not yet explicitly certified. Interfaces, Worker compatibility, recovery behavior, and operational guidance may change. Run it only on a machine and Discord server where you accept local automation risk. Do not use production credentials or production repositories for first setup.
 
 ## Prerequisites
 
-- Windows 10/11 for the supported setup.
+- Windows 10/11 or Ubuntu Native for the supported normal Node/npm Runtime path.
 - Node.js `>=22.13.0` and npm.
 - A Discord application/bot with Message Content Intent enabled.
 - At least one supported Worker CLI installed and authenticated as the same OS user that runs HERMESS.
@@ -34,6 +34,15 @@ npm install
 npm run check
 ```
 
+Ubuntu/Linux shell:
+
+```sh
+git clone https://github.com/ju0o/Hermess-discord-orchestrator.git
+cd Hermess-discord-orchestrator
+npm install
+npm run check
+```
+
 ## Configuration
 
 ```powershell
@@ -42,7 +51,7 @@ Copy-Item .env.example .env
 
 Edit `.env` locally. Never commit it. Set a writable `HERMESS_ROOT`, `HERMESS_PROJECTS_ROOT`, and the Discord bot token variables for the Workers you intend to use. Paths may be absolute or relative to the checkout. Keep the control token unset unless a trusted local caller is required.
 
-Optional JSON examples are in `config/discord-identities.example.json` and `config/project-workspaces.example.json`. Copy them to local filenames only when needed; do not commit real IDs or local workspace paths.
+Optional JSON examples are in `config/discord-identities.example.json` and `config/project-workspaces.example.json`. Ubuntu/Linux operators may start from `.env.ubuntu.example` and `config/project-workspaces.ubuntu.example.json`; copy them to ignored machine-local locations, replace placeholders, and set `WORKSPACE_REGISTRY_PATH` to the absolute registry path. Do not commit real IDs, tokens, or local workspace paths.
 
 ## Discord setup
 
@@ -69,9 +78,19 @@ For the first run:
 npm start
 ```
 
+Ubuntu/Linux uses the same command:
+
+```sh
+npm start
+```
+
 The process must remain running while Discord is in use. In a second terminal:
 
 ```powershell
+npm run health
+```
+
+```sh
 npm run health
 ```
 
@@ -83,7 +102,7 @@ In the interactive Runtime terminal, press `Ctrl+C` and wait for the shutdown me
 
 ## Known limitations
 
-- This is a Windows-first Public Preview.
+- This is an early Public Preview validated on Windows 10/11 and Ubuntu Native; other Linux distributions are not yet explicitly certified.
 - Worker CLI installation, login, model availability, and provider quotas remain external prerequisites.
 - Discord bot identity discovery and dynamic workroom behavior are partial.
 - Runtime recovery, session restoration, and ambiguous Discord delivery reconciliation are bounded rather than complete.

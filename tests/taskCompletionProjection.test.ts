@@ -13,6 +13,7 @@ import type { AgentId } from "../src/domain/types.js";
 import { Protocol, type ProtocolSink, type ProtocolEvent } from "../src/tasks/protocol.js";
 import type { TaskRecord } from "../src/domain/types.js";
 import { RunBudgetController } from "../src/runtime/runBudget.js";
+import { READ_ONLY_DISCOVERY } from "../src/contracts/executionContract.js";
 
 const dirs: string[] = [];
 afterEach(() => { while (dirs.length) { const d = dirs.pop()!; try { rmSync(d, { recursive: true, force: true }); } catch {} } });
@@ -61,6 +62,34 @@ function setupTeam(opts: { status?: string; taskStatus?: string; allPass?: boole
 }
 
 describe("TaskCompletionProjection", () => {
+  async function legacySingleAgentFixture() {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "legacy-single-agent-")); dirs.push(dir);
+    const store = new Store(path.join(dir, "test.db")); const tasks = new TaskRepository(store); const teams = new TeamRepository(store);
+    tasks.upsertProject({ projectId: "p", name: "P", workspace: dir, ssotPaths: [], status: "ACTIVE" });
+    const task = tasks.create({ taskId: "LEGACY-RESULT", projectId: "p", title: "read only", goal: "Inspect and report", role: "DEVELOPER", requiredCapabilities: ["coding"], assignedAgent: "CODEX", status: "RUNNING", workspace: dir, readContext: {}, fileScope: ["README.md"], doNot: ["source modification"], validation: ["README checksum"], owner: "ASUS", nextOwner: "ASUS", attempt: 1, executionContract: READ_ONLY_DISCOVERY });
+    const sink = new CompletionSink(); const protocol = new Protocol(store, sink);
+    const provenance = { executionId: "legacy-execution-1", taskId: task.taskId, agentId: "CODEX" as AgentId, completedAt: store.now() };
+    await protocol.emitWorkerEvidence("ACK", task, "CODEX", "ASUS", { role: "DEVELOPER", round: 0, attempt: 1 }, provenance);
+    return { store, tasks, teams, task, sink, protocol, provenance };
+  }
+  it("projects one accepted current legacy single-agent Result to terminal completion", async () => {
+    const x = await legacySingleAgentFixture();
+    try {
+      await x.protocol.emitWorkerEvidence("RESULT", x.task, "CODEX", "ASUS", { ok: true, result: "README checksum inspected and reported", role: "DEVELOPER", round: 0, attempt: 1 }, x.provenance);
+      expect(new TaskCompletionProjection(x.store, x.tasks, x.teams, x.protocol).reconcile(x.task.taskId)).toMatchObject({ projected: true, reason: "AUTHORITATIVE_COMPLETION" });
+      expect(x.tasks.get(x.task.taskId)).toMatchObject({ status: "COMPLETED", result: "README checksum inspected and reported", completionCandidate: true });
+      expect(x.sink.events.filter((event) => event.type === "COMPLETION")).toHaveLength(1);
+    } finally { x.store.close(); }
+  });
+  it("fails closed for duplicate current legacy Results", async () => {
+    const x = await legacySingleAgentFixture();
+    try {
+      await x.protocol.emitWorkerEvidence("RESULT", x.task, "CODEX", "ASUS", { ok: true, result: "first", role: "DEVELOPER", round: 0, attempt: 1 }, x.provenance);
+      await x.protocol.emitWorkerEvidence("RESULT", x.task, "CODEX", "ASUS", { ok: true, result: "duplicate", role: "DEVELOPER", round: 0, attempt: 1 }, { ...x.provenance, executionId: "legacy-execution-duplicate" });
+      expect(new TaskCompletionProjection(x.store, x.tasks, x.teams, x.protocol).reconcile(x.task.taskId).reason).toBe("LEGACY_RESULT_NOT_UNIQUE");
+      expect(x.tasks.get(x.task.taskId)?.status).toBe("RUNNING"); expect(x.sink.events.filter((event) => event.type === "COMPLETION")).toHaveLength(0);
+    } finally { x.store.close(); }
+  });
   it("stale DISPATCHED with all PASS + COMPLETE projects to PASS", () => {
     const { store, tasks, taskId, proj } = setupTeam({ taskStatus: "DISPATCHED" });
     try {

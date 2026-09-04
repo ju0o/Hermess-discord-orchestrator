@@ -53,7 +53,10 @@ export function effectiveExecutionContract(task: TaskRecord): ExecutionContract 
 // keyword, task.executionContract was unset, so the DEVELOPER task silently ran read-only).
 // effectiveExecutionContract() additionally treats role === "DEVELOPER" as decisive.
 export function mutationRequired(task: Pick<TaskRecord, "goal" | "validation">): boolean {
-  return /\b(implement|fix|modify|edit|change|build failure|resolve)\b/i.test(`${task.goal} ${task.validation.join(" ")}`);
+  // A read-only instruction commonly says "Do not modify any file". Strip
+  // only the directly negated action; a later positive action still wins.
+  const text = `${task.goal} ${task.validation.join(" ")}`.replace(/\b(?:do not|don't|never|without)\s+(?:implement|fix|modify|edit|change|resolve)\b/gi, "");
+  return /\b(implement|fix|modify|edit|change|build failure|resolve)\b/i.test(text);
 }
 
 export function assertExecutionContract(contract: ExecutionContract | undefined, task: Pick<TaskRecord, "goal" | "validation">): ExecutionContract {

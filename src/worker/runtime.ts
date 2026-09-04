@@ -21,6 +21,7 @@ import { continuationDispatchPayload } from "../runtime/continuationIntent.js";
 import { bindReusedEvidence, contextFromResult, handoffContextForDispatch, recordHandoffContext } from "../runtime/handoffContext.js";
 import type { ModelCatalog } from "../models/catalog.js";
 import type { ModelAvailabilityFallback } from "../models/availabilityFallback.js";
+import { effectiveExecutionContract } from "../contracts/executionContract.js";
 
 /** Runtime-owned bridge from Discord worker messages to the existing CLI adapters. */
 export class WorkerRuntime {
@@ -76,7 +77,7 @@ export class WorkerRuntime {
       const provenance: WorkerExecutionProvenance = { executionId: randomUUID(), taskId: task.taskId, agentId, completedAt: this.store.now() };
       const effectiveRole = envelope.role || role?.role || executionTask.role;
       const ack = contract.buildAck(executionTask, effectiveRole, envelope.round, "ASUS");
-      await this.protocol.emitWorkerEvidence("ACK", executionTask, agentId, "ASUS", { ...ack.payload, role: ack.role, round: ack.round, thread_id: executionTask.threadId }, provenance);
+      await this.protocol.emitWorkerEvidence("ACK", executionTask, agentId, "ASUS", { ...ack.payload, role: ack.role, round: ack.round, attempt: claimAttempt, thread_id: executionTask.threadId }, provenance);
       // ACK publication can legitimately update durable Task metadata through
       // the live gateway/inbound path. Capture the callback fence only after
       // that owned side effect; later attempt/Role/round/version changes remain stale.
@@ -175,7 +176,8 @@ export class WorkerRuntime {
         // empty "successful"-looking result must never be normalized into a
         // Developer PASS -- see normalizeDeveloperResult.
         const developer = normalizeDeveloperResult(result);
-        const requiredEvidencePresent = task.validation.every((command) => result.validationEvidence?.some((item) => item.type === (/build/i.test(command) ? "BUILD" : /test/i.test(command) ? "TEST" : "TYPECHECK")));
+        const requiredEvidencePresent = effectiveExecutionContract(task).mode === "READ_ONLY_DISCOVERY"
+          || task.validation.every((command) => result.validationEvidence?.some((item) => item.type === (/build/i.test(command) ? "BUILD" : /test/i.test(command) ? "TEST" : "TYPECHECK")));
         const developerOk = developer.ok && requiredEvidencePresent;
         return { ok: developerOk, output: result.output, evidence: result.evidence,
           ...(structuredEvidence ? { validationEvidence: structuredEvidence } : {}),
@@ -277,7 +279,7 @@ export class WorkerRuntime {
       }
     }
     const resultEvent = await this.protocol.emitWorkerEvidence(wire.event_type === "REVIEW" ? "REVIEW" : wire.event_type === "QA_RESULT" ? "QA_RESULT" : "RESULT", task, agentId, recipient,
-      { ...wire.payload, role, round, thread_id: task.threadId, next_owner: recipient }, provenance);
+      { ...wire.payload, role, round, attempt: task.attempt, thread_id: task.threadId, next_owner: recipient }, provenance);
     // TEAM_CHAIN_COMPLETE is a lifecycle transition, not merely a message.
     // Finish the durable team before the budget gate so an accepted QA result
     // cannot be stranded by an idle-budget expiry immediately afterwards.

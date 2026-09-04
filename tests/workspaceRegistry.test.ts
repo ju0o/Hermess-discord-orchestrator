@@ -25,4 +25,14 @@ describe("local workspace registry", () => {
     expect(() => registry.require("UNKNOWN")).toThrow("WORKSPACE_REGISTRY_PROJECT_NOT_FOUND");
     store.close();
   });
+
+  it("uses a machine-local WORKSPACE_REGISTRY_PATH override", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "hermess-registry-")); dirs.push(root);
+    const workspace = path.join(root, "project"); const file = path.join(root, "local-registry.json");
+    writeFileSync(file, JSON.stringify({ projects: { OVERRIDE: { workspace, status: "ACTIVE" } } }));
+    const previous = process.env.WORKSPACE_REGISTRY_PATH; process.env.WORKSPACE_REGISTRY_PATH = file;
+    const store = new Store(path.join(root, "state.db"));
+    try { expect(new WorkspaceRegistry(store).require("OVERRIDE")).toMatchObject({ workspace }); }
+    finally { previous === undefined ? delete process.env.WORKSPACE_REGISTRY_PATH : process.env.WORKSPACE_REGISTRY_PATH = previous; store.close(); }
+  });
 });

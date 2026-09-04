@@ -1,0 +1,10 @@
+{
+  "_comment": "Ubuntu/Linux machine-local workspace registry template. Copy it outside the repository, select it with WORKSPACE_REGISTRY_PATH, replace /home/OPERATOR placeholders, and never commit real paths or secrets.",
+  "version": "1.0.0",
+  "projects": {
+    "EXAMPLE_PROJECT": {
+      "workspace": "/home/OPERATOR/Projects/example-project",
+      "status": "ACTIVE"
+    }
+  }
+}

@@ -17,7 +17,7 @@
  * space -- they do not depend on the Owner's machine actually having npm
  * installed under Program Files.
  */
-import { mkdtempSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -48,7 +48,9 @@ function makeSpacedFixtureDir(): string {
   return dir;
 }
 
-describe("ProcessRunner Windows execution boundary", () => {
+const IS_WINDOWS = process.platform === "win32";
+
+describe.runIf(IS_WINDOWS)("ProcessRunner Windows execution boundary", () => {
   it("(A) executes a no-space executable path correctly", async () => {
     const { runner } = makeRunner();
     const output = await runner.probe("cmd.exe", ["/d", "/c", "echo", "no-space-ok"], process.cwd());
@@ -108,15 +110,21 @@ describe("ProcessRunner Windows execution boundary", () => {
     expect(output.exitCode).not.toBe(0);
   });
 
-  it("(D+E integration) dependencyPreflight fails closed, with evidence, when the resolved npm launcher genuinely fails, through the real spawn boundary", async () => {
+});
+
+describe("ProcessRunner npm launcher failure integration", () => {
+  it("fails closed with evidence when the resolved npm launcher fails", async () => {
     const { runner } = makeRunner();
     const workspace = makeSpacedFixtureDir();
     writeFileSync(path.join(workspace, "package.json"), "{}");
-    // Point PATH at a spaced fixture directory whose npm.cmd deterministically fails,
+    // Point PATH at a spaced fixture directory whose npm launcher deterministically fails,
     // so dependencyPreflight's `runner.probe("npm", ...)` resolves through it.
     const npmDir = mkdtempSync(path.join(os.tmpdir(), "Program Files bin "));
     dirs.push(npmDir);
     writeFileSync(path.join(npmDir, "npm.cmd"), "@echo off\r\necho simulated npm failure 1>&2\r\nexit /b 1\r\n");
+    const npmShim = path.join(npmDir, "npm");
+    writeFileSync(npmShim, "#!/bin/sh\necho simulated npm failure 1>&2\nexit 1\n");
+    chmodSync(npmShim, 0o755);
     const originalPath = process.env.PATH;
     process.env.PATH = `${npmDir}${path.delimiter}${originalPath}`;
     try {
@@ -127,5 +135,30 @@ describe("ProcessRunner Windows execution boundary", () => {
     } finally {
       process.env.PATH = originalPath;
     }
+  });
+});
+
+describe.runIf(!IS_WINDOWS)("ProcessRunner Linux execution boundary", () => {
+  it("executes a no-space executable path", async () => {
+    const { runner } = makeRunner();
+    const output = await runner.probe(process.execPath, ["-e", "console.log('no-space-ok')"], process.cwd());
+    expect(output.exitCode).toBe(0); expect(output.stdout).toContain("no-space-ok");
+  });
+  it("preserves a script path and arguments containing spaces", async () => {
+    const { runner } = makeRunner(); const spaced = makeSpacedFixtureDir();
+    const script = path.join(spaced, "print argv.mjs"); writeFileSync(script, "console.log(JSON.stringify(process.argv.slice(2))); ");
+    const output = await runner.probe(process.execPath, [script, "arg one", 'arg"two', "tail\\"], spaced);
+    expect(output.exitCode).toBe(0); expect(JSON.parse(output.stdout.trim())).toEqual(["arg one", 'arg"two', "tail\\"]);
+  });
+  it("resolves a PATH launcher in a spaced directory", async () => {
+    const { runner } = makeRunner(); const binDir = mkdtempSync(path.join(os.tmpdir(), "Program Files bin ")); dirs.push(binDir);
+    const launcher = path.join(binDir, "spaced-launcher"); writeFileSync(launcher, "#!/bin/sh\necho spaced-launcher-ok\n"); chmodSync(launcher, 0o755);
+    const originalPath = process.env.PATH; process.env.PATH = `${binDir}${path.delimiter}${originalPath}`;
+    try { const output = await runner.probe("spaced-launcher", [], process.cwd()); expect(output.exitCode).toBe(0); expect(output.stdout).toContain("spaced-launcher-ok"); }
+    finally { process.env.PATH = originalPath; }
+  });
+  it("fails closed for a non-zero executable", async () => {
+    const { runner } = makeRunner(); const output = await runner.probe(process.execPath, ["-e", "process.exit(7)"], process.cwd());
+    expect(output.exitCode).toBe(7);
   });
 });
