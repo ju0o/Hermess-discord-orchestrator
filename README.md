@@ -17,6 +17,10 @@ HERMESS Discord Orchestrator is a local Runtime that coordinates approved coding
 
 This release is an early Public Preview, validated on Windows 10/11 and Ubuntu Native for the normal Node/npm Runtime path. Other Linux distributions are not yet explicitly certified. Interfaces, Worker compatibility, recovery behavior, and operational guidance may change. Run it only on a machine and Discord server where you accept local automation risk. Do not use production credentials or production repositories for first setup.
 
+Active feature development is closed for the current project cycle; see
+[Maintenance Mode](docs/MAINTENANCE.md) for the supported scope, maintenance
+criteria, and non-goals.
+
 ## Prerequisites
 
 - Windows 10/11 or Ubuntu Native for the supported normal Node/npm Runtime path.
